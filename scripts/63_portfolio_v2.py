@@ -92,7 +92,7 @@ WIN = TR[10]["손익$"]
 def wtab(x):
     g = x.groupby(x.index.dayofweek)
     return {DOW[k]: (len(v), v.mean(), (v > 0).mean() * 100) for k, v in g}
-WT_IN = wtab(WIN)
+WT_IN = wtab(WIN); WT_EX = wtab(WIN.drop(D49))     # 그림·본문은 4/9 제외 기준 (수요일 평균이 4/9 하루에 끌려 올라가서)
 trim1 = lambda x: x.groupby(x.index.dayofweek, group_keys=False).apply(lambda y: y.drop(y.nlargest(1).index))
 WT1 = trim1(WIN)
 _w, _o = WT1[WT1.index.dayofweek == 2], WT1[WT1.index.dayofweek != 2]
@@ -144,13 +144,17 @@ fig.tight_layout(); fig.savefig(P / "v2_0409.png", dpi=160, facecolor="white"); 
 
 fig, ax = plt.subplots(figsize=(9, 3.0)); style(ax)
 xs = np.arange(5); wdt = 0.38
-v = [WT_IN[d][1] for d in DOW]; n = [WT_IN[d][0] for d in DOW]
+v = [WT_EX[d][1] for d in DOW]; n = [WT_EX[d][0] for d in DOW]
 ax.bar(xs, v, 0.55, color=[BLUE if x_ >= 0 else ORANGE for x_ in v])
 for x_, v_, n_ in zip(xs, v, n):
     ax.text(x_, v_ + (20 if v_ >= 0 else -20), f"{v_:+,.0f}\n({n_}건)", ha="center", va="bottom" if v_ >= 0 else "top", fontsize=8, color=INK2)
+w_all = WT_IN["수"][1]
+ax.bar(2, w_all, 0.55, fill=False, edgecolor=INK2, lw=1, ls="--")
+ax.text(2, w_all + 15, f"4/9 포함 시 {w_all:+,.0f}", ha="center", va="bottom", fontsize=8, color=INK2)
 ax.axhline(0, color="#c9c8c1", lw=1); ax.set_xticks(xs); ax.set_xticklabels([f"{d}요일" for d in DOW])
 ax.set_ylabel("거래당 손익 ($)", color=INK2, fontsize=9)
-ax.set_ylim(-150, 560)
+ax.set_title("요일별 거래당 손익 (2025-04-09 제외)", loc="left", fontsize=10)
+ax.set_ylim(-320, 560)
 fig.tight_layout(); fig.savefig(P / "v2_weekday.png", dpi=160, facecolor="white"); plt.close(fig)
 
 # ── 표 ──
@@ -182,7 +186,7 @@ mon_rows = "".join(f"<tr><td>{y}</td>" + "".join((lambda v: f"<td class='{cls(v)
 sep = ALL[10][(ALL[10].index.year == 2026) & (ALL[10].index.month == 9)]
 sep_rows = "".join(f"<tr><td>{d:%m-%d} ({DOW[d.dayofweek]})</td><td>{r.K:,.0f} 콜</td><td>{r['진입가']:.2f}</td><td>{r['정산']:.2f}</td><td>{'손절' if r['손절'] else '만기 정산'}</td>"
                    f"<td class='{cls(r['손익$'])}'>{usd(r['손익$'])}</td></tr>" for d, r in sep.iterrows())
-wd_rows = "".join(f"<tr><td>{d}</td><td>{WT_IN[d][0]}</td><td class='{cls(WT_IN[d][1])}'>{usd(WT_IN[d][1])}</td><td>{WT_IN[d][2]:.0f}%</td></tr>" for d in DOW)
+wd_rows = "".join(f"<tr><td>{d}</td><td>{WT_EX[d][0]}</td><td class='{cls(WT_EX[d][1])}'>{usd(WT_EX[d][1])}</td><td>{WT_EX[d][2]:.0f}%</td><td>{usd(WT_IN[d][1]) if d == '수' else ''}</td></tr>" for d in DOW)
 c10 = {nm: (a, b) for nm, a, b in comp}["10초 뒤 매도호가"]
 why_rows = "".join(f"<tr><td>{d}</td><td>{WHY[d][4]}</td><td class='{cls(WHY[d][0])}'>{WHY[d][0]:+.3f}%</td><td>{WHY[d][1]:.0f}%</td><td>{WHY_NE[d]:.0f}%</td><td>{WHY[d][2]:.3f}%</td><td>{WHY[d][3]}일</td></tr>" for d in DOW)
 
@@ -236,7 +240,8 @@ html = f"""
 
 <h2>7. 요일별 분석</h2>
 <img src="v2_weekday.png" width="470"/>
-<table class="small"><tr><th>요일</th><th>건수</th><th>거래당</th><th>승률</th></tr>{wd_rows}</table>
+<table class="small"><tr><th>요일</th><th>건수</th><th>거래당</th><th>승률</th><th>4/9 포함 시</th></tr>{wd_rows}</table>
+<p>2025-04-09(수요일) 한 건을 빼면 수요일이 거래당 {usd(WT_EX['수'][1])}로 요일 중 가장 나쁘다. 이 한 건을 넣으면 {usd(WT_IN['수'][1])}이 된다.</p>
 <h3>통계 검정</h3>
 <table>
 <tr><th>수요일</th><td>수요일 평균은 4/9(수요일) 하루 때문에 높게 나온다. 요일마다 최고의 날을 1건씩 빼면 수요일 거래당 {usd(W['wed'][0])}, 다른 요일 {usd(W['wed'][1])}이다(p = {W['wed'][2]:.2f}, 순위 검정 p = {W['rank']:.3f}). 방향은 분명하지만 우연과 구분할 수준은 아니다.</td></tr>
