@@ -1,0 +1,8 @@
+databento>=0.60
+pandas>=2.2
+numpy
+scipy
+matplotlib
+pyarrow
+statsmodels
+PyMuPDF
