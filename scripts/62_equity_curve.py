@@ -1,7 +1,7 @@
 """
-2022-05 ~ 현재 누적 손익 (SPX ATM 콜 1계약, 매도호가 매수 + 체결 지연 5초·10초 (틱 실측, 2023-03-28 전은 틱 기간 평균 비율 적용), 실제 비용 수수료 편도 $5·정산 $5 가정).
-  백테스트(output/rule_v2/trades.csv) + 앞으로 기록(output/forward_log.csv, 매수일만) 이어붙임.
-  선: −90% 손절 − CME 시세료(월 $228.80) / 같은 것에서 2025-04-09(관세 유예 급등일) 뺀 것 + 낙폭·재표본 낙폭
+2022-05 ~ 현재 누적 손익 (SPX ATM 콜 1계약). 계산은 spx0dte/realistic.py:
+  매도호가 매수 + 체결 지연 5초·10초 (2023-03-28 전은 10:00:00 매도호가), −90% 손절(초 단위 중간가, 마감 직전 포함;
+  초 단위 호가가 없는 날은 1분), 수수료 편도 $5·정산 $5, CME 시세료 월 $228.80. 백테스트 + 앞으로 기록.
 결과: output/equity_2022_now.png
 """
 import sys, pathlib; sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -19,39 +19,13 @@ plt.rcParams.update({"font.family": "Malgun Gothic", "axes.unicode_minus": False
 BLUE, ORANGE, GRAY, INK, INK2, GRID = "#2a78d6", "#eb6834", "#8a8a85", "#0b0b0b", "#5c5b55", "#e6e5e0"
 CME = 228.80
 
-# 백테스트: 매도호가 매수, 체결 지연 5초·10초. 손절은 매분 중간가 ≤ 매수가×0.1 → 그 분 매수호가.
-FP = pd.read_pickle(OUT / "f_paths.pkl"); px = load_spx_ohlc(SPX_CSV)
-X = features_10(FP, signal_grids_ext(load_mnq()[0], FP), px)
-LG = pd.read_pickle(OUT / "legs10_full.pkl")
-LG = LG[(LG.leg == "C") & (LG.offset == 0) & (LG.entry == "10:00")].set_index("date").join(X[["signal"]], how="inner")
-LG = LG[LG.signal].sort_index()
-TK = pd.read_csv(OUT / "ticks" / "N_days.csv", index_col=0, parse_dates=True)       # 61번: 틱 1초 격자 매도호가
-
-def rule_at(r, p0):
-    """trade_rule과 같은 규칙(−90% 손절 → 그 분 매수호가, 아니면 만기)을 진입가 p0로. 경로[0] = 10:01:00."""
-    mp = np.asarray(r.mid_path, float); hit = np.flatnonzero(np.isfinite(mp) & (mp <= p0 * (1 - STOP) + 1e-6))
-    if len(hit):
-        return (float(r.bid_path[hit[0]]) - p0 - 2 * FEE) * 100
-    return (r.pay - p0 - FEE - (EXERCISE if r.pay > 0 else 0)) * 100
-
-def entry(d, r, sec):
-    """sec초 지연 매도호가: 틱 있는 날(2023-03-28~)은 실측, 그 전은 지연 없이 10:00:00 매도호가."""
-    if d in TK.index:
-        return float(TK.at[d, f"ask_{sec}"])
-    return float(r.ask)
-
-RATIO = {k: float((TK[f"ask_{k}"] / TK["ask_0"]).mean()) for k in DELAYS}
-SER = {k: pd.Series([rule_at(r, entry(d, r, k)) for d, r in zip(LG.index, LG.itertuples())], LG.index) for k in DELAYS}
-ref = {"0초·중간가": pd.Series([rule_at(r, float(r.mid)) for r in LG.itertuples()]).sum(),
-       "0초·매도호가": pd.Series([rule_at(r, float(r.ask)) for r in LG.itertuples()]).sum(),
-       **{f"{k}초·매도호가": v.sum() for k, v in SER.items()}}
+from spx0dte import realistic as RL
+TK = RL.load_ticks(); RATIO = RL.ratios(TK); LG = RL.load_legs()
+SER = {k: RL.trades(LG, k, TK, RATIO)["손익$"] for k in DELAYS}
+ref = {"0초·매도호가": RL.trades(LG, 0, TK, RATIO)["손익$"].sum(), **{f"{k}초·매도호가": v.sum() for k, v in SER.items()}}
 bt_end = LG.index.max()
-
-# 앞으로 기록 (10:00:00 매도호가만 기록돼 있음 → 그 값으로)
-L = pd.read_csv(OUT / "forward_log.csv", parse_dates=["date"]).set_index("date")
-L = L[(L["신호"] == "매수") & L["정산"].notna() & (L.index > bt_end)]
-pay, ask = L["정산"].astype(float), L["콜 매도호가"].astype(float)
-FW = {k: pd.Series((pay - ask - FEE - np.where(pay > 0, EXERCISE, 0)) * 100, L.index) for k in DELAYS}   # 손절 여부는 기록값 무시(현재 1건, 손절 없음)
+FW = {k: RL.forward(k, RATIO) for k in DELAYS}
+FW = {k: v.loc[v.index > bt_end, "손익$"] for k, v in FW.items()}
 d49 = pd.Timestamp("2025-04-09")
 BS = {k: pd.concat([SER[k], FW[k]]).sort_index() for k in DELAYS}
 first = min(v.index.min() for v in BS.values()); last = max(v.index.max() for v in BS.values())

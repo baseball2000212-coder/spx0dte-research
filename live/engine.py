@@ -81,7 +81,7 @@ def pick_atm(chain, forward, max_dist=10.0):
 def tick_up(p):
     """SPX 옵션 호가 단위로 올림: 3.00 미만 0.05, 이상 0.10."""
     t = 0.05 if p < 3 else 0.10
-    return round(np.ceil(p / t - 1e-9) * t, 2)
+    return round(np.ceil(round(p / t, 6) - 1e-9) * t, 2)      # round: float32 9.1(=9.1000004)이 9.2로 올라가던 버그 (2026-09-30)
 
 
 @dataclass
@@ -108,11 +108,12 @@ class ChasePlan:
 # ---------- 손절 판정 ----------
 @dataclass
 class StopRule:
-    """중간가 ≤ 매수가 × (1 − stop)이면 매도 (매수호가 지정가). no_check_after 이후는 판정 안 함 (마감 직전 호가 붕괴 방지)."""
+    """매초 중간가 ≤ 매수가 × (1 − stop)이면 매도 (매수호가 지정가). 시각과 상관없이 마감 직전에도 판정 (사용자 원칙, 2026-09-30).
+    no_check_after를 "HH:MM"으로 주면 그 뒤엔 판정 안 함 (기본 None = 끝까지 판정)."""
     stop: float = 0.9
-    no_check_after: str = "15:50"
+    no_check_after: str | None = None
 
     def hit(self, mid_now, cost, now_hhmm):
-        if now_hhmm >= self.no_check_after or not np.isfinite(mid_now):
+        if (self.no_check_after and now_hhmm >= self.no_check_after) or not np.isfinite(mid_now):
             return False
         return mid_now <= cost * (1 - self.stop) + 1e-6

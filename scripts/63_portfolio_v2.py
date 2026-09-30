@@ -195,7 +195,7 @@ html = f"""
 <p class="sub">작성 {pd.Timestamp.now():%Y-%m-%d} · 백테스트 2022-05-16 ~ {last:%Y-%m-%d} · SPX 옵션 1계약 기준</p>
 
 <h2>1. 요약</h2>
-<p>S&amp;P500 지수(SPX)의 당일 만기(0DTE) 옵션을 매수만 하는 전략이다. 개장 후 30분 동안 SPX가 올랐고 나스닥100 마이크로 선물(MNQ) 5분봉이 일목균형표 구름 위에 있으면, 뉴욕 시간 10:00에 등가격(ATM) 콜 1계약을 매도호가로 산다. 콜 값이 매수가의 10% 아래로 떨어지면 팔고(−90% 손절), 아니면 만기에 현금정산을 받는다.</p>
+<p>S&amp;P500 지수(SPX)의 당일 만기(0DTE) 옵션을 매수만 하는 전략이다. 개장 후 30분 동안 SPX가 올랐고 나스닥100 마이크로 선물(MNQ) 5분봉이 일목균형표 구름 위에 있으면, 뉴욕 시간 10:00에 등가격(ATM) 콜 1계약을 매도호가로 산다. 초 단위 호가 중간값이 매수가의 10% 아래로 떨어지면 바로 팔고(−90% 손절), 아니면 만기에 현금정산을 받는다.</p>
 <p>주문 지연을 고려해 5초, 10초 뒤의 매도호가로 샀다고 계산했다. 초 단위 호가는 2023-03-28부터 있어서, 그 전 {int((ALL[10].index < '2023-03-28').sum())}건은 지연 없이 10:00:00 매도호가로 계산했다. 모든 숫자에서 NH선물 수수료(계약당 $5)와 MNQ 시세 이용료(CME, 월 $228.80)를 뺐다. SPX 옵션 시세 이용료(CBOE)는 없다.</p>
 {kpi}
 <img src="v2_equity.png" width="510"/>
@@ -207,7 +207,7 @@ html = f"""
 <tr><th>조건 1</th><td>SPX 10:00:00 가격 &gt; 09:31:00 가격</td></tr>
 <tr><th>조건 2</th><td>MNQ 5분봉(09:55~10:00) 종가 &gt; 일목 구름 윗선 (9-26-52)</td></tr>
 <tr><th>매수</th><td>ATM 콜 1계약, 매도호가 지정가. 미체결 시 매초 매도호가로 재주문</td></tr>
-<tr><th>손절</th><td>호가 중간값이 매수가 대비 −90%가 되면 손절</td></tr>
+<tr><th>손절</th><td>초 단위 호가 중간값이 매수가 대비 −90%가 되면 바로 손절 (마감 직전 포함)</td></tr>
 <tr><th>그 외</th><td>하루 1번, 장중 추가 매수 없음. 손절이 없으면 16:00 SPX 종가로 현금정산</td></tr>
 </table>
 
@@ -269,7 +269,7 @@ html = f"""
 <li>옵션: SPXW 당일 만기 1분 최우선 호가 (Databento OPRA, 2022-05-16 ~ 2026-09-23, 1,093거래일), 매수일 초 단위 호가 (2023-03-28 ~, 319일)</li>
 <li>선물: MNQ 1분봉 연결선물 (Databento CME, 월물 교체 가격 보정), SPX 일봉 종가 (Investing.com)</li>
 <li>SPX 값: 옵션 풋콜 패리티로 계산 (실제 SPX와 분 단위 차이 중앙값 0.35pt)</li>
-<li>체결: 5·10초 뒤 매도호가 매수 (2023-03 전은 10:00:00 매도호가), 손절은 그 분 매수호가 매도, 아니면 16:00 SPX 종가 현금정산. 수수료 편도 $5, 정산 $5 가정, CME 시세 이용료 월 $228.80</li>
+<li>체결: 5·10초 뒤 매도호가 매수 (2023-03 전은 10:00:00 매도호가). 손절은 초 단위 중간가로 판정해 다음 초 매수호가로 매도 (초 단위 호가가 없는 2023-03 전은 1분 중간가), 아니면 16:00 SPX 종가 현금정산. 수수료 편도 $5, 정산 $5 가정, CME 시세 이용료 월 $228.80</li>
 </ul>
 <p class="note">과거 데이터 백테스트이며 미래 수익을 보장하지 않는다.</p>
 """
@@ -292,6 +292,11 @@ table.small th, table.small td { font-size: 8pt; padding: 2pt 4pt; }
 .note { color: #6B7570; font-size: 8pt; }
 img { margin: 4pt 0; }
 """
+# 그림은 불투명 RGB·색상 프로필 없이 (투명도·ICC가 있으면 깃허브 PDF 뷰어에서 그림이 안 보임, 2026-09-30)
+from PIL import Image
+for g in ("v2_equity.png", "v2_0409.png", "v2_weekday.png"):
+    im = Image.open(P / g)
+    bg = Image.new("RGB", im.size, "white"); bg.paste(im.convert("RGBA"), mask=im.convert("RGBA").split()[-1]); bg.save(P / g, format="PNG")
 for f in ("malgun.ttf", "malgunbd.ttf"):
     shutil.copy(pathlib.Path(r"C:\Windows\Fonts") / f, P / f)
 story = fitz.Story(html=html, user_css=css, archive=fitz.Archive(str(P)))

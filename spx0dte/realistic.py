@@ -2,18 +2,42 @@
 실제 체결 기준 손익 (사용자 지시 2026-09-29: 기본값 = 매도호가 매수 + 체결 지연 5초·10초, −90% 손절, 수수료 $5).
   - 틱 있는 날(2023-03-28~): output/ticks/N_days.csv의 5·10초 뒤 실측 매도호가
   - 그 전(2022-05~2023-03)·틱 없는 날·앞으로 기록: 지연 없이 10:00:00 매도호가 (사용자 지시 2026-09-29, 평균 비율 추정 안 씀)
-  - 손절: 매분 중간가 ≤ 매수가 × 0.1 → 그 분 매수호가 매도 (경로[0] = 10:01:00), 아니면 16:00 정산
+  - 손절 (사용자 지시 2026-09-30): 초 단위 중간가 ≤ 매수가 × 0.1 이면 시각과 상관없이(마감 직전 포함) 다음 초 매수호가로 매도.
+    초 단위 호가가 없는 날(2023-03-28 전)만 1분 중간가로 판정 (경로[0] = 10:01:00). 손절 없으면 16:00 정산.
 CME 시세료(월 $228.80)는 net_cum()에서 월 단위로 뺌.
 """
 import numpy as np
 import pandas as pd
 
-from .config import OUT, SPX_CSV
+from .config import OUT, SPX_CSV, DATA
 from .exits import FEE, EXERCISE
 from .strategy import STOP
 
 DELAYS = (5, 10)
 CME = 228.80
+SEC_DIR = DATA / "ticks" / "sec"          # 매수일 산 콜의 1초 격자 bid·ask (09:59:00~15:59:59, scripts/55)
+_SEC = {}
+
+
+def load_sec(d, path=None):
+    """그날 산 콜의 1초 격자 (없으면 None). 라벨 t = t 순간의 호가 상태."""
+    key = str(path) if path else f"{pd.Timestamp(d):%Y-%m-%d}"
+    if key not in _SEC:
+        f = path or SEC_DIR / f"{pd.Timestamp(d):%Y-%m-%d}.parquet"
+        _SEC[key] = pd.read_parquet(f) if f.exists() else None
+    return _SEC[key]
+
+
+def sec_stop(s, d, p0, entry_sec, pay, stop=STOP):
+    """초 단위 손절: 진입 뒤 매초 중간가 ≤ p0×(1−stop) 이면 다음 초 매수호가로 매도. (손익$, 손절 여부, 손절 시각)"""
+    if stop is not None:
+        t0 = pd.Timestamp(f"{pd.Timestamp(d):%Y-%m-%d} 10:00:00", tz="America/New_York") + pd.Timedelta(seconds=entry_sec)
+        w = s[s.index > t0]; mid = (w.bid + w.ask) / 2
+        hit = mid.index[(mid <= p0 * (1 - stop) + 1e-6).values]
+        if len(hit):
+            b = s.bid.asof(hit[0] + pd.Timedelta(seconds=1))
+            return (float(b) - p0 - 2 * FEE) * 100, True, hit[0]
+    return (pay - p0 - FEE - (EXERCISE if pay > 0 else 0)) * 100, False, None
 
 
 def load_legs(signal_only=True):
@@ -57,12 +81,17 @@ def entry(d, r, sec, TK, R):
 
 
 def trades(L, sec, TK=None, R=None, stop=STOP):
-    """sec = None(10:00 중간가) / 0(10:00:00 매도호가) / 5 / 10 → 거래 표 [K, 진입가, 정산, 손절, 손익$, 틱실측]."""
+    """sec = None(10:00 중간가) / 0(10:00:00 매도호가) / 5 / 10 → 거래 표 [K, 진입가, 정산, 손절, 손절 시각, 손익$, 틱실측].
+    초 단위 호가가 있는 날은 초 단위 손절, 없는 날은 1분 손절."""
     TK = load_ticks() if TK is None else TK; R = ratios(TK) if R is None else R
     rows = []
     for d, r in zip(L.index, L.itertuples()):
-        p0 = entry(d, r, sec, TK, R); pnl, st = rule_at(r, p0, stop)
-        rows.append({"date": d, "K": r.K, "진입가": p0, "정산": r.pay, "손절": st, "손익$": pnl, "틱실측": d in TK.index})
+        p0 = entry(d, r, sec, TK, R); s = load_sec(d) if d in TK.index else None
+        if s is not None:
+            pnl, st, t = sec_stop(s, d, p0, sec or 0, r.pay, stop)
+        else:
+            (pnl, st), t = rule_at(r, p0, stop), None
+        rows.append({"date": d, "K": r.K, "진입가": p0, "정산": r.pay, "손절": st, "손절 시각": t, "손익$": pnl, "틱실측": s is not None})
     return pd.DataFrame(rows).set_index("date")
 
 
@@ -71,8 +100,15 @@ def forward(sec, R):
     L = pd.read_csv(OUT / "forward_log.csv", parse_dates=["date"]).set_index("date")
     L = L[(L["신호"] == "매수") & L["정산"].notna()]
     pay, ask = L["정산"].astype(float), L["콜 매도호가"].astype(float)
-    return pd.DataFrame({"K": L["행사가"], "진입가": ask, "정산": pay, "손절": False,
-                         "손익$": (pay - ask - FEE - np.where(pay > 0, EXERCISE, 0)) * 100, "틱실측": False, "앞으로 기록": True})
+    pnl = (pay - ask - FEE - np.where(pay > 0, EXERCISE, 0)) * 100
+    tick = pd.Series(False, L.index)
+    if sec and f"손익$ {sec}초(−90%)" in L:                           # 40번이 초 단위 호가로 계산해 둔 값 (5·10초 매도호가, −90% 손절)
+        got = L[f"손익$ {sec}초(−90%)"].notna()
+        pnl = pnl.where(~got, L[f"손익$ {sec}초(−90%)"]); ask = ask.where(~got, L[f"매도호가 {sec}초"]); tick = got
+        L, pay, ask, pnl, tick = L[got], pay[got], ask[got], pnl[got], tick[got]     # 초 단위 호가 아직 없는 날은 뺌 (받은 뒤 반영)
+    stopped = L.get(f"손절 {sec}초", L.get("손절(−90%)", pd.Series("없음", L.index))).astype(str).str.contains(":")
+    return pd.DataFrame({"K": L["행사가"], "진입가": ask, "정산": pay, "손절": stopped & tick,
+                         "손익$": pnl, "틱실측": tick, "앞으로 기록": True})
 
 
 def net_cum(pnl, first=None):
