@@ -17,7 +17,7 @@ class Broker(ABC):
 
     @abstractmethod
     def spx_0dte_chain(self) -> pd.DataFrame:
-        """오늘 만기 SPXW 호가 [strike, call_bid, call_ask, put_bid, put_ask]. 웹소켓 20종목 한도 → ATM ±4행사가(콜·풋 16개)만, 중심은 09:31 전후 다시 잡기."""
+        """오늘 만기 SPXW 호가 [strike, call_bid, call_ask, put_bid, put_ask]. 웹소켓 20종목 한도 → ATM ±4행사가(행사가 9개 × 콜·풋 = 18종목)만, 중심은 09:31 전후 다시 잡기."""
 
     @abstractmethod
     def place_limit_buy(self, strike: float, right: str, qty: int, price: float) -> str:
